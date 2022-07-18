@@ -7,7 +7,7 @@ from scipy.linalg import cholesky, eigh
 from scipy.sparse import coo_matrix, csr_matrix
 from scipy.sparse.linalg import aslinearoperator, eigsh
 from scipy.spatial.distance import pdist, squareform
-from scipy.special import gamma, kn
+from scipy.special import gamma, kv
 
 from pykeops.numpy import LazyTensor
 
@@ -203,8 +203,8 @@ def matern_covariance(grid, scale=1., ell=1., nu=2):
     dist = squareform(dist)
     dist[dist == 0.0] += np.finfo(float).eps  # strict zeros result in nan
 
-    K = scale**2 / (2**(nu - 1) * gamma(nu)) * (kappa * dist)**nu * kn(
-        nu, kappa * dist)
+    K = (scale**2 / (2**(nu - 1) * gamma(nu))
+         * (kappa * dist)**nu * kv(nu, kappa * dist))
     K[np.diag_indices_from(K)] += 1e-8
     return K
 
@@ -225,9 +225,9 @@ def matern_spectral_density(omega, scale=1., ell=1., nu=2):
         Smoothness parameter.
     """
     kappa = np.sqrt(2 * nu) / ell
-    s = (scale**2 * np.sqrt(4 * np.pi) * gamma(nu + 1 / 2) * kappa**(2 * nu) /
-         gamma(nu) * (kappa**2 + 4 * np.pi**2 * omega**2)**(-(nu + 1 / 2)))
-    return s
+    return (scale**2 * np.sqrt(4 * np.pi) * gamma(nu + 1 / 2)
+            * kappa**(2 * nu) / gamma(nu)
+            * (kappa**2 + 4 * np.pi**2 * omega**2)**(-(nu + 1 / 2)))
 
 
 # DEPRECATED from here on in
