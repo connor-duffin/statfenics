@@ -15,13 +15,9 @@ logger = logging.getLogger(__name__)
 fe.set_log_level(40)
 
 
-def boundary(x, on_boundary):
-    return on_boundary
-
-
-def matern_covariance(grid, scale=1., ell=1., nu=2):
+def sq_exp_covariance(grid, scale, ell):
     """
-    Compute Matern covariance matrix.
+    Squared exponential covariance function.
 
     Parameters
     ----------
@@ -31,23 +27,18 @@ def matern_covariance(grid, scale=1., ell=1., nu=2):
         Variance hyperparameter.
     ell : float
         Length-scale hyperparameter.
-    nu : float
-        Smoothness parameter.
     """
-    kappa = np.sqrt(2 * nu) / ell
     dist = pdist(grid, metric="euclidean")
     dist = squareform(dist)
-    dist[dist == 0.0] += np.finfo(float).eps  # strict zeros result in nan
 
-    K = scale**2 / (2**(nu - 1) * gamma(nu)) * (kappa * dist)**nu * kn(
-        nu, kappa * dist)
-    K[np.diag_indices_from(K)] += 1e-8
+    K = scale**2 * np.exp(-dist**2 / (2 * ell**2))
+    K[np.diag_indices_from(K)] += 1e-10
     return K
 
 
-def matern_spectral_density(omega, scale=1., ell=1., nu=2):
+def sq_exp_spectral_density(omega, scale, ell, D=1):
     """
-    Matern spectral density.
+    Squared exponential spectral density.
 
     Parameters
     ----------
@@ -57,16 +48,18 @@ def matern_spectral_density(omega, scale=1., ell=1., nu=2):
         Variance hyperparameter.
     ell : float
         Length-scale hyperparameter.
-    nu : float
-        Smoothness parameter.
     """
-    kappa = np.sqrt(2 * nu) / ell
-    s = (scale**2 * np.sqrt(4 * np.pi) * gamma(nu + 1 / 2) * kappa**(2 * nu) /
-         gamma(nu) * (kappa**2 + 4 * np.pi**2 * omega**2)**(-(nu + 1 / 2)))
-    return s
+    return (scale**2 * (2 * np.pi * ell**2)**(D / 2) *
+            np.exp(-omega**2 * ell**2 / 2))
 
 
-def cov_approx_keops(grid, scale, ell, k=32):
+def sq_exp_evd(grid, scale, ell, k=32):
+    K_dense = sq_exp_covariance(grid=grid, scale=scale, ell=ell)
+    vals, vecs = eigsh(K_dense, k=k)
+    return vals, vecs
+
+
+def sq_exp_evd_keops(grid, scale, ell, k=32):
     """
     Approximate a squared-exponential covariance matrix using KeOps.
 
@@ -109,45 +102,7 @@ def cov_approx_keops(grid, scale, ell, k=32):
     return vals.astype(dtype_return), vecs.astype(dtype_return)
 
 
-def sq_exp_covariance(grid, scale, ell):
-    """
-    Squared exponential covariance function.
-
-    Parameters
-    ----------
-    grid : ndarray
-        Spatial grid of shape (n_points, n_dimensions).
-    scale : float
-        Variance hyperparameter.
-    ell : float
-        Length-scale hyperparameter.
-    """
-    dist = pdist(grid, metric="euclidean")
-    dist = squareform(dist)
-
-    K = scale**2 * np.exp(-dist**2 / (2 * ell**2))
-    K[np.diag_indices_from(K)] += 1e-10
-    return K
-
-
-def sq_exp_spectral_density(omega, scale, ell, D=1):
-    """
-    Squared exponential spectral density.
-
-    Parameters
-    ----------
-    omega : float
-        Frequency at which to evaluate the spectral density.
-    scale : float
-        Variance hyperparameter.
-    ell : float
-        Length-scale hyperparameter.
-    """
-    return (scale**2 * (2 * np.pi * ell**2)**(D / 2) *
-            np.exp(-omega**2 * ell**2 / 2))
-
-
-def cov_approx(V, k=64, scale=1., ell=1., bc="Dirichlet"):
+def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
     """
     Approximate the SqExp covariance using Hilbert-GP.
 
@@ -170,6 +125,10 @@ def cov_approx(V, k=64, scale=1., ell=1., bc="Dirichlet"):
         Boundary conditions to use in the approximation. Either 'Dirichlet' or
         'Neumann'.
     """
+    def boundary(x, on_boundary):
+        return on_boundary
+
+
     bc_types = ["Dirichlet", "Neumann"]
     if bc not in bc_types:
         raise ValueError("Invalid bc, expected one of {bc_types}")
@@ -224,6 +183,54 @@ def cov_approx(V, k=64, scale=1., ell=1., bc="Dirichlet"):
     return (eigenvals, eigenvecs)
 
 
+def matern_covariance(grid, scale=1., ell=1., nu=2):
+    """
+    Compute Matern covariance matrix.
+
+    Parameters
+    ----------
+    grid : ndarray
+        Spatial grid of shape (n_points, n_dimensions).
+    scale : float
+        Variance hyperparameter.
+    ell : float
+        Length-scale hyperparameter.
+    nu : float
+        Smoothness parameter.
+    """
+    kappa = np.sqrt(2 * nu) / ell
+    dist = pdist(grid, metric="euclidean")
+    dist = squareform(dist)
+    dist[dist == 0.0] += np.finfo(float).eps  # strict zeros result in nan
+
+    K = scale**2 / (2**(nu - 1) * gamma(nu)) * (kappa * dist)**nu * kn(
+        nu, kappa * dist)
+    K[np.diag_indices_from(K)] += 1e-8
+    return K
+
+
+def matern_spectral_density(omega, scale=1., ell=1., nu=2):
+    """
+    Matern spectral density.
+
+    Parameters
+    ----------
+    omega : float
+        Frequency at which to evaluate the spectral density.
+    scale : float
+        Variance hyperparameter.
+    ell : float
+        Length-scale hyperparameter.
+    nu : float
+        Smoothness parameter.
+    """
+    kappa = np.sqrt(2 * nu) / ell
+    s = (scale**2 * np.sqrt(4 * np.pi) * gamma(nu + 1 / 2) * kappa**(2 * nu) /
+         gamma(nu) * (kappa**2 + 4 * np.pi**2 * omega**2)**(-(nu + 1 / 2)))
+    return s
+
+
+# DEPRECATED from here on in
 def cov_kron_evd(K, n_modes=6):
     """
     (DEPRECATED) Compute the leading `n_modes` eigenvalue/vector pairs of
