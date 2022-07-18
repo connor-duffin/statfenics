@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "statfenics"
+version = "0.0.1"
+authors = [
+  { name="Connor Duffin", email="cpd32@cam.ac.uk" },
+]
+description = "Tools for statFEM problems with Fenics"
+readme = "README.md"
+license = { file="LICENSE" }
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = ["numpy", "scipy", "fenics", "petsc4py", "pytest"]
+
+[project.urls]
+"Homepage" = "https://github.com/connor-duffin/statfenics"
+"Bug Tracker" = "https://github.com/connor-duffin/statfenics/issues"
