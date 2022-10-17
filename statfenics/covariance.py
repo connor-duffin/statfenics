@@ -1,3 +1,5 @@
+from slepc4py import SLEPc
+
 import fenics as fe
 
 import logging
@@ -128,7 +130,6 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
     def boundary(x, on_boundary):
         return on_boundary
 
-
     bc_types = ["Dirichlet", "Neumann"]
     if bc not in bc_types:
         raise ValueError("Invalid bc, expected one of {bc_types}")
@@ -152,13 +153,31 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
         bc.apply(M)
 
     M = M.mat()
-    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
     A = A.mat()
-    A_scipy = csr_matrix(A.getValuesCSR()[::-1], shape=A.size)
 
-    # use shift-invert mode in scipy
-    # faster and more stable than SLEPc
-    laplace_eigenvals, eigenvecs = eigsh(A_scipy, k, M_scipy, sigma=1e-14)
+    E = SLEPc.EPS()
+    E.create()
+    E.setOperators(A, M)
+    E.setFromOptions()
+    E.setDimensions(nev=k)
+    E.setWhichEigenpairs(SLEPc.EPS.Which.SMALLEST_MAGNITUDE)
+    E.setTolerances(1e-12, 100000)
+    E.solve()
+
+    vr, wr = A.getVecs()
+    vi, wi = A.getVecs()
+
+    laplace_eigenvals = np.zeros((k, ))
+    eigenvecs = np.zeros((vr.array_r.shape[0], k))
+    errors = np.zeros((k, ))
+
+    for i in range(k):
+        laplace_eigenvals[i] = np.real(E.getEigenpair(i, vr, vi))
+        eigenvecs[:, i] = vr.array_r
+        errors[i] = E.computeError(i)
+
+    # enforce positivity --- picks up eigenvalues that are negative
+    laplace_eigenvals = np.abs(laplace_eigenvals)
     logger.info("Laplacian eigenvalues: %s", laplace_eigenvals)
     eigenvals = sq_exp_spectral_density(
         np.sqrt(laplace_eigenvals),
@@ -166,20 +185,24 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
         ell=ell,
         D=V.tabulate_dof_coordinates().shape[1])
 
-    # scale so eigenfunctions are orthonormal on function space
-    eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
-    eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
+    indices = np.where(np.isclose(laplace_eigenvals, 1.))
+    # use shift-invert mode in scipy
+    # M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
+    # A_scipy = csr_matrix(A.getValuesCSR()[::-1], shape=A.size)
+    # laplace_eigenvals, eigenvecs = eigsh(A_scipy, k, M_scipy, sigma=1e-14)
 
-    # indices = np.where(np.isclose(laplace_eigenvals, 1.))
+    # scale so eigenfunctions are orthonormal on function space
+    # eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
+    # eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
+
     # if len(indices) > 0:
     #     indices = np.concatenate(
     #         (indices, np.where(np.isclose(laplace_eigenvals, 0.))))
     # else:
     #     indices = np.where(np.isclose(laplace_eigenvals, 0.))
 
-    # eigenvals = np.delete(eigenvals, indices)
-    # eigenvecs = np.delete(eigenvecs, indices, axis=1)
-
+    eigenvals = np.delete(eigenvals, indices)
+    eigenvecs = np.delete(eigenvecs, indices, axis=1)
     return (eigenvals, eigenvecs)
 
 
