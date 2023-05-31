@@ -146,13 +146,15 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
     fe.assemble(a, tensor=A)
 
     M = fe.PETScMatrix()
-    fe.assemble(u * v * fe.dx, tensor=M)
+    M_no_bc = fe.PETScMatrix()
+    for M in [M, M_no_bc]:
+        fe.assemble(u * v * fe.dx, tensor=M)
 
     if bc is not None:
-        bc.apply(A)
-        bc.apply(M)
+        bc.apply(A); bc.apply(M)
 
     M = M.mat()
+    M_no_bc = M_no_bc.mat()
     A = A.mat()
 
     E = SLEPc.EPS()
@@ -183,24 +185,14 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
         np.sqrt(laplace_eigenvals),
         scale=scale,
         ell=ell,
-        D=V.tabulate_dof_coordinates().shape[1])
-
-    indices = np.where(np.isclose(laplace_eigenvals, 1.))
-    # use shift-invert mode in scipy
-    # M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
-    # A_scipy = csr_matrix(A.getValuesCSR()[::-1], shape=A.size)
-    # laplace_eigenvals, eigenvecs = eigsh(A_scipy, k, M_scipy, sigma=1e-14)
+        D=V.mesh().geometric_dimension())
 
     # scale so eigenfunctions are orthonormal on function space
-    # eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
-    # eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
+    M_scipy = csr_matrix(M_no_bc.getValuesCSR()[::-1], shape=M.size)
+    eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
+    eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
 
-    # if len(indices) > 0:
-    #     indices = np.concatenate(
-    #         (indices, np.where(np.isclose(laplace_eigenvals, 0.))))
-    # else:
-    #     indices = np.where(np.isclose(laplace_eigenvals, 0.))
-
+    indices = np.where(np.isclose(laplace_eigenvals, 1.))
     eigenvals = np.delete(eigenvals, indices)
     eigenvecs = np.delete(eigenvecs, indices, axis=1)
     return (eigenvals, eigenvecs)

@@ -84,6 +84,14 @@ def test_sq_exp_evd_keops():
 def test_sq_exp_evd_hilbert():
     vals, vecs = sq_exp_evd_hilbert(V, k=k, scale=scale, ell=ell)
 
+    # mass matrix used to ensure orthogonality on the weighted inner product
+    # <u, v> = u' M v
+    u, v = fe.TrialFunction(V), fe.TestFunction(V)
+    M = fe.PETScMatrix()
+    fe.assemble(u * v * fe.dx, tensor=M)
+    M = M.mat()
+    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
+
     # first two should be deleted for better approx.
     assert vals.shape == (126, )
     assert vecs.shape == (x_grid.shape[0], 126)
@@ -92,9 +100,8 @@ def test_sq_exp_evd_hilbert():
     vals_sorted = np.sort(vals)[::-1]
     np.testing.assert_almost_equal(vals, vals_sorted)
 
-    np.testing.assert_almost_equal(vecs[:, 0] @ vecs[:, 0], 1.)
-    np.testing.assert_almost_equal(vecs[:, 0] @ vecs[:, 1], 0.)
-    np.testing.assert_almost_equal(vecs.T @ vecs, np.eye(126))
+    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 0], 1.)
+    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 1], 0.)
 
 
 def test_sq_exp_evd_hilbert_2d():
@@ -104,14 +111,12 @@ def test_sq_exp_evd_hilbert_2d():
     k = 32
 
     # mass matrix used to ensure orthogonality on the weighted inner product
-    # <u, v> = u M v'
-    # bc = fe.DirichletBC(V, fe.Constant(0), boundary)
-    # u, v = fe.TrialFunction(V), fe.TestFunction(V)
-    # M = fe.PETScMatrix()
-    # fe.assemble(u * v * fe.dx, tensor=M)
-    # bc.apply(M)
-    # M = M.mat()
-    # M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
+    # <u, v> = u' M v
+    u, v = fe.TrialFunction(V), fe.TestFunction(V)
+    M = fe.PETScMatrix()
+    fe.assemble(u * v * fe.dx, tensor=M)
+    M = M.mat()
+    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
 
     vals, vecs = sq_exp_evd_hilbert(V, k=k, scale=scale, ell=ell)
 
@@ -119,9 +124,8 @@ def test_sq_exp_evd_hilbert_2d():
     assert vecs.shape == (1089, 21)
 
     # check orthogonality wrt mass matrix
-    np.testing.assert_almost_equal(vecs[:, 0] @ vecs[:, 0], 1.)
-    np.testing.assert_almost_equal(vecs[:, 0] @ vecs[:, 1], 0.)
-    # np.testing.assert_allclose(vecs.T @ vecs, np.eye(21), rtol=1e-6)
+    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 0], 1.)
+    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 1], 0.)
 
 
 def test_sq_exp_evd_hilbert_neumann():
@@ -131,11 +135,11 @@ def test_sq_exp_evd_hilbert_neumann():
 
     # check orthogonality on the weighted inner product
     # <u, v> = u M v'
-    # u, v = fe.TrialFunction(V), fe.TestFunction(V)
-    # M = fe.PETScMatrix()
-    # fe.assemble(u * v * fe.dx, tensor=M)
-    # M = M.mat()
-    # M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
+    u, v = fe.TrialFunction(V), fe.TestFunction(V)
+    M = fe.PETScMatrix()
+    fe.assemble(u * v * fe.dx, tensor=M)
+    M = M.mat()
+    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
 
     vals, vecs = sq_exp_evd_hilbert(V,
                                     k=32,
@@ -147,8 +151,8 @@ def test_sq_exp_evd_hilbert_neumann():
     assert vecs.shape == (1089, 32)
 
     # check orthogonality wrt mass matrix
-    np.testing.assert_almost_equal(vecs[:, 0] @ vecs[:, 0], 1.)
-    np.testing.assert_almost_equal(vecs[:, 0] @ vecs[:, 1], 0.)
+    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 0], 1.)
+    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 1], 0.)
 
     analytical_eigenvalues = np.array(
         [0, np.pi**2, np.pi**2, 2 * np.pi**2, 4 * np.pi**2, 4 * np.pi**2])
