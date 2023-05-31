@@ -3,7 +3,7 @@
 Small set tools for statistical finite element (statFEM) problems, with `fenics`. Contains some utilities that I have found useful, which include:
 
 * A Gaussian process covariance module (`covariance.py`).
-* `Fenics` implementation of the Hilbert-GP of [Solin et. al.](https://doi.org/10.1007/s11222-019-098)
+* `Fenics` implementation of the Hilbert-GP of [Solin et. al.](https://doi.org/10.1007/s11222-019-09886-w)
 * Observation operator creation (`utils.py`).
 * Various IO helpers.
 
