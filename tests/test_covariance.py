@@ -8,7 +8,7 @@ from scipy.sparse import csr_matrix
 from scipy.spatial.distance import pdist, squareform
 from scipy.linalg import eigh
 
-from statfenics.covariance import (sq_exp_covariance, sq_exp_spectral_density,
+from statfenics.covariance import (laplacian_evd, sq_exp_covariance, sq_exp_spectral_density,
                                    sq_exp_evd, sq_exp_evd_keops,
                                    sq_exp_evd_hilbert, matern_covariance)
 
@@ -81,6 +81,26 @@ def test_sq_exp_evd_keops():
     assert rel_error <= rtol
 
 
+def test_laplacian_eigenvalues():
+    k = 8
+
+    # first check that 1D eigenvalues are ok to ~0.1%
+    mesh = fe.UnitIntervalMesh(256)
+    V = fe.FunctionSpace(mesh, "CG", 1)
+    vals, vecs = laplacian_evd(V, k, "Dirichlet")
+    vals_true = np.array([np.pi**2 * j**2 for j in range(1, k + 1)])
+    np.testing.assert_allclose(vals, vals_true, rtol=1e-3)
+
+    # next check that 2D eigenvalues are OK to ~1%
+    mesh = fe.UnitSquareMesh(50, 50)
+    V = fe.FunctionSpace(mesh, "CG", 1)
+    vals, vecs = laplacian_evd(V, k, "Dirichlet")
+    vals_true = np.sort(
+        np.array([np.pi**2 * (m**2 + n**2) for m in range(1, k + 1) for n in range(1, k + 1)])
+    )
+    np.testing.assert_allclose(vals, vals_true[:k], rtol=1e-2)
+
+
 def test_sq_exp_evd_hilbert():
     vals, vecs = sq_exp_evd_hilbert(V, k=k, scale=scale, ell=ell)
 
@@ -93,8 +113,8 @@ def test_sq_exp_evd_hilbert():
     M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
 
     # first two should be deleted for better approx.
-    assert vals.shape == (126, )
-    assert vecs.shape == (x_grid.shape[0], 126)
+    assert vals.shape == (128, )
+    assert vecs.shape == (x_grid.shape[0], 128)
 
     # check ordering
     vals_sorted = np.sort(vals)[::-1]
@@ -124,8 +144,34 @@ def test_sq_exp_evd_hilbert_2d():
     assert vecs.shape[0] == 1089
 
     # check orthogonality wrt mass matrix
-    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 0], 1.)
-    np.testing.assert_almost_equal(vecs[:, 0] @ M_scipy @ vecs[:, 1], 0.)
+    for i in range(10):
+        np.testing.assert_almost_equal(vecs[:, i] @ M_scipy @ vecs[:, i], 1.)
+        np.testing.assert_almost_equal(vecs[:, i] @ M_scipy @ vecs[:, -1], 0.)
+
+
+def test_sq_exp_evd_hilbert_2d_vector():
+    mesh = fe.UnitSquareMesh(32, 32)
+    V = fe.VectorFunctionSpace(mesh, "CG", 1)
+    scale, ell = 1., 1.
+    k = 32
+
+    # mass matrix used to ensure orthogonality on the weighted inner product
+    # <u, v> = u' M v
+    u, v = fe.TrialFunction(V), fe.TestFunction(V)
+    M = fe.PETScMatrix()
+    fe.assemble(fe.inner(u, v) * fe.dx, tensor=M)
+    M = M.mat()
+    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
+
+    vals, vecs = sq_exp_evd_hilbert(V, k=k, scale=scale, ell=ell)
+
+    # should be twice as we now have a vector function space
+    assert vecs.shape[0] == 2178
+
+    # check orthogonality wrt mass matrix
+    for i in range(10):
+        np.testing.assert_almost_equal(vecs[:, i] @ M_scipy @ vecs[:, i], 1.)
+        np.testing.assert_almost_equal(vecs[:, i] @ M_scipy @ vecs[:, -1], 0.)
 
 
 def test_sq_exp_evd_hilbert_neumann():
