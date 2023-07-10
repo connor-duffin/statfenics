@@ -5,11 +5,13 @@ import fenics as fe
 import logging
 import numpy as np
 
-from scipy.linalg import cholesky, eigh
-from scipy.sparse import coo_matrix, csr_matrix
+from scipy.linalg import cho_factor, cho_solve
+from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import aslinearoperator, eigsh
 from scipy.spatial.distance import pdist, squareform
 from scipy.special import gamma, kv
+
+from .utils import build_observation_operator
 
 from pykeops.numpy import LazyTensor
 
@@ -194,6 +196,15 @@ def laplacian_evd(V, k=64, bc="Dirichlet"):
         eigenvecs[:, i] = vr.array_r
         errors[i] = E.computeError(i)
 
+    # scale so eigenfunctions are orthonormal on function space
+    M = fe.PETScMatrix()
+    fe.assemble(
+        fe.inner(fe.TrialFunction(V), fe.TestFunction(V)) * fe.dx,
+        tensor=M)
+    M = M.mat()
+    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
+    eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
+    eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
     return (laplace_eigenvals, eigenvecs)
 
 
@@ -230,16 +241,6 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
         scale=scale,
         ell=ell,
         D=V.mesh().geometric_dimension())
-
-    # scale so eigenfunctions are orthonormal on function space
-    M = fe.PETScMatrix()
-    fe.assemble(
-        fe.inner(fe.TrialFunction(V), fe.TestFunction(V)) * fe.dx,
-        tensor=M)
-    M = M.mat()
-    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
-    eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
-    eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
 
     return (eigenvals, eigenvecs)
 
@@ -291,67 +292,58 @@ def matern_spectral_density(omega, scale=1., ell=1., nu=2):
             * (kappa**2 + 4 * np.pi**2 * omega**2)**(-(nu + 1 / 2)))
 
 
-# DEPRECATED from here on in
-def cov_kron_evd(K, n_modes=6):
-    """
-    (DEPRECATED) Compute the leading `n_modes` eigenvalue/vector pairs of
-    kron(K, K).
-    """
-    n = K.shape[0]
-    vecs = np.zeros((n**2, n_modes))
-    vals_K, vecs_K = eigh(K)
-    vals_cov = np.kron(vals_K, vals_K)
-    idx_sorted = np.argsort(vals_cov)[(-n_modes):]
-    vals = vals_cov[idx_sorted]
+# TODO(connor): include support for nonzero means
+# TODO(connor): include support for matern spectral representation
+class SqExpHilbertGP:
+    def __init__(self, V, k, bcs="Dirichlet"):
+        self.V = V
+        self.k = k
+        self.D = V.mesh().geometric_dimension()
 
-    idx_first_vec = idx_sorted // n
-    idx_second_vec = idx_sorted % n
+        # compute eigendecomposition
+        self.eigenvals, self.phi = laplacian_evd(V=V, k=k, bc=bcs)
+        self.spectral_density = sq_exp_spectral_density
 
-    for k, (i, j) in enumerate(zip(idx_first_vec, idx_second_vec)):
-        vecs[:, k] = np.kron(vecs_K[i], vecs_K[j])
-        np.testing.assert_almost_equal(vals_K[i] * vals_K[j], vals[k])
+        # initialise parameters
+        self.sigma = np.exp(np.random.normal())
+        self.rho, self.ell = np.random.uniform(size=(2, ))
 
-    return vals, vecs
+    def set_dataset(self, x, y):
+        self.x = x
+        self.y = y
+        self.n_obs = len(y)
+        self.H = build_observation_operator(self.x, self.V)
 
+    def set_priors(self, rho, ell, sigma):
+        """ Set prior functions. """
+        self.rho_prior = rho
+        self.ell_prior = ell
+        self.sigma_prior = sigma
 
-def cov_fenics_evd(scale, ell, V, n_modes=6):
-    """
-    (DEPRECATED) Compute the EVD of a cov. matrix defined over V (assumed
-    2D grid).
-    """
-    grid_fenics = V.tabulate_dof_coordinates()
-    idx_sorted = np.lexsort((grid_fenics[:, 1], grid_fenics[:, 0]))
+    def lml(self):
+        """ Log marginal likelihood. """
+        S = self.spectral_density(
+            np.sqrt(self.eigenvals), self.rho, self.ell, self.D)
+        Z = (self.H @ self.phi).T @ (self.H @ self.phi)
+        Z[np.diag_indices_from(Z)] += self.sigma / S
+        Z_chol = cho_factor(Z, lower=True)
 
-    # P : fenics ordering -> kronecker ordering, and
-    # P.T : kronecker ordering -> fenics ordering
-    P = coo_matrix(
-        (np.ones_like(idx_sorted), (np.sort(idx_sorted), idx_sorted)))
-    P = P.tocsr()
+        phi_trans_y = (self.H @ self.phi).T @ self.y
+        Z_chol_inv_phi_trans_y = cho_solve(Z_chol, phi_trans_y)
 
-    grid = P @ grid_fenics
-    x = np.unique(grid[:, 0])
+        log_det = (2 * (self.n_obs - self.k) * np.log(self.sigma)
+                   + 2 * np.sum(np.log(np.diag(Z_chol[0])))
+                   + np.sum(np.log(S)))
+        maha = np.dot(self.y, self.y)
+        maha -= Z_chol_inv_phi_trans_y.T @ Z_chol_inv_phi_trans_y
+        maha *= 1 / self.sigma**2
+        return (0.5 * log_det + 0.5 * maha
+                + 0.5 * self.n_obs * np.log(2 * np.pi))
 
-    K = sq_exp_covariance(x[:, np.newaxis], np.sqrt(scale), ell)
-    vals, vecs = cov_kron_evd(K, n_modes=n_modes)
-    return vals, P.T @ vecs  # permute for proper ordering
+    def grad_lml(self):
+        """ Gradient of log marginal likelihood. """
+        pass
 
-
-def cov_fenics_chol(scale, ell, grid_fenics):
-    """
-    (DEPRECATED) Compute the Cholesky decomposition of a cov. matrix defined
-    over V (assumed 2D grid).
-    """
-    idx_sorted = np.lexsort((grid_fenics[:, 1], grid_fenics[:, 0]))
-
-    # P : fenics ordering -> kronecker ordering, and
-    # P.T : kronecker ordering -> fenics ordering
-    P = coo_matrix(
-        (np.ones_like(idx_sorted), (np.sort(idx_sorted), idx_sorted)))
-    P = P.tocsr()
-
-    grid = P @ grid_fenics
-    x = np.unique(grid[:, 0])
-
-    K = sq_exp_covariance(x[:, np.newaxis], np.sqrt(scale), ell)
-    K_chol = cholesky(K, lower=True)
-    return np.kron(K_chol, K_chol)
+    def lmp(self):
+        """ Log marginal posterior. """
+        return self.lml()

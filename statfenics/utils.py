@@ -1,4 +1,3 @@
-import h5py
 import logging
 
 import numpy as np
@@ -10,38 +9,9 @@ from petsc4py.PETSc import Mat
 logger = logging.getLogger(__name__)
 
 
-def thin_simulation(filename, thin=50):
-    """
-    Thin a hdf5 output file from Oregonator simulations.
-
-    Old function that is left as-is for backwards compatibility.
-    """
-    output = h5py.File(filename, "r")
-    output_new = h5py.File("../outputs/bz-antispiral.h5", "w")
-
-    for key, value in output.attrs.items():
-        output_new.attrs[key] = value
-    output_new.attrs["thin"] = thin
-
-    x = output["x"][:]
-    t = output["t"][:]
-
-    u = output["u"][::thin, :]
-    v = output["v"][::thin, :]
-    t = output["t"][::thin]
-
-    output_new.create_dataset("u", data=u)
-    output_new.create_dataset("v", data=v)
-    output_new.create_dataset("x", data=x)
-    output_new.create_dataset("t", data=t)
-
-    output.close()
-    output_new.close()
-
-
 def dolfin_to_csr(A):
     """
-    Convert assembled matrix to scipy CSR.
+    Convert assembled Fenics/PETsc matrix to scipy CSR.
 
     Parameters
     ----------
@@ -69,8 +39,10 @@ def build_observation_operator(x_obs, V, sub=(), out="scipy"):
         Grid on which we want to interpolate the FEM solution on.
     V : fenics.FunctionSpace
         FunctionSpace that the FEM solution is an element of.
-    sub : int, optional
-        Subspace of the functionspace that the FEM solution is an element of.
+    sub : tuple, optional
+        Subspace of V that the FEM solution is an element of. If `V` is a
+        scalar function space then this should be (), otherwise it should
+        be a tuple of integers for the number of total subspaces.
     out : str, optional
         Output type, either "scipy" or "petsc"
     """
