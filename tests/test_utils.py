@@ -52,8 +52,8 @@ def test_build_observation_operator_vector_functionspace():
     thin = 5
     subspace_dofs = V.sub(0).dofmap().dofs()
     x = V.tabulate_dof_coordinates()[subspace_dofs[::thin]]
-    H = build_observation_operator(x, V)
-    H_subspace = build_observation_operator(x, V, sub=1)
+    H = build_observation_operator(x, V, sub=(0, ))
+    H_subspace = build_observation_operator(x, V, sub=(1, ))
 
     # basic example
     test = fe.interpolate(fe.Expression(("x[0]", "0"), degree=8), V)

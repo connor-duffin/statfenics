@@ -56,7 +56,7 @@ def dolfin_to_csr(A):
     return csr
 
 
-def build_observation_operator(x_obs, V, sub=0, out="scipy"):
+def build_observation_operator(x_obs, V, sub=(), out="scipy"):
     """
     Build interpolation matrix from `x_obs` on function space V. This
     assumes that the observations are from the first sub-function of V.
@@ -80,13 +80,18 @@ def build_observation_operator(x_obs, V, sub=0, out="scipy"):
     mesh_cells = mesh.cells()
     bbt = mesh.bounding_box_tree()
 
-    # dofs from first subspace
-    if V.num_sub_spaces() > 1:
-        dolfin_element = V.sub(sub).dolfin_element()
-        dofmap = V.sub(sub).dofmap()
-    else:
+    if len(sub) == 0:
         dolfin_element = V.dolfin_element()
         dofmap = V.dofmap()
+    elif len(sub) == 1:
+        dolfin_element = V.sub(sub[0]).dolfin_element()
+        dofmap = V.sub(sub[0]).dofmap()
+    elif len(sub) == 2:
+        dolfin_element = V.sub(sub[0]).sub(sub[1]).dolfin_element()
+        dofmap = V.sub(sub[0]).sub(sub[1]).dofmap()
+    else:
+        logger.error("no support for more than 2 nested FunctionSpaces")
+        raise ValueError
 
     sdim = dolfin_element.space_dimension()
 
