@@ -126,7 +126,8 @@ def laplacian_evd(comm, V, k=64, bc="Dirichlet", return_function=False):
         'Neumann'.
     return_function: bool, optional
         Flag to return a list of fenics functions instead of a numpy.ndarray.
-        This allows for interpolation across different FunctionSpaces.
+        Allows for interpolation across different FunctionSpaces; helpful for
+        moving functions across MPI processes.
 
     Returns
     -------
@@ -235,8 +236,13 @@ def sq_exp_evd_hilbert(comm, V, k=64, scale=1., ell=1., bc="Dirichlet"):
 
     Parameters
     ----------
+    comm: mpi4py.MPI.COMM
+        MPI communicator on which we do the computing. Usually MPI.COMM_SELF or
+        MPI.COMM_WORLD.
     V : fenics.FunctionSpace
-        FunctionSpace on which to compute the approximation.
+        FunctionSpace on which to compute the approximation. Assumed to be a
+        scalar function.  Vector-valued functions are to be handled by the
+        user.
     k : int, optional
         Number of modes to take in the approximation.
     scale : float
