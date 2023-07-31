@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "statfenics"
-version = "0.0.1"
+version = "0.0.2"
 authors = [
   { name="Connor Duffin", email="cpd32@cam.ac.uk" },
 ]
