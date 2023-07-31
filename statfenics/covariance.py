@@ -6,7 +6,6 @@ import logging
 import numpy as np
 
 from scipy.linalg import cho_factor, cho_solve
-from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import aslinearoperator, eigsh
 from scipy.spatial.distance import pdist, squareform
 from scipy.special import gamma, kv
@@ -106,7 +105,7 @@ def sq_exp_evd_keops(grid, scale, ell, k=32):
     return vals.astype(dtype_return), vecs.astype(dtype_return)
 
 
-def laplacian_evd(V, k=64, bc="Dirichlet"):
+def laplacian_evd(comm, V, k=64, bc="Dirichlet", return_function=False):
     """
     Aproximate the smallest k eigenvalues/eigenfunctions of the Laplacian.
 
@@ -115,6 +114,9 @@ def laplacian_evd(V, k=64, bc="Dirichlet"):
 
     Parameters
     ----------
+    comm: mpi4py.MPI.COMM
+        MPI communicator on which we do the computing. Usually MPI.COMM_SELF or
+        MPI.COMM_WORLD.
     V : fenics.FunctionSpace
         FunctionSpace on which to compute the approximation.
     k : int, optional
@@ -122,10 +124,20 @@ def laplacian_evd(V, k=64, bc="Dirichlet"):
     bc : str, optional
         Boundary conditions to use in the approximation. Either 'Dirichlet' or
         'Neumann'.
-    """
-    e = V.element()
-    dim = e.num_sub_elements()
+    return_function: bool, optional
+        Flag to return a list of fenics functions instead of a numpy.ndarray.
+        This allows for interpolation across different FunctionSpaces.
 
+    Returns
+    -------
+    numpy.ndarray
+        Eigenvalues of the Laplacian, computed using the FunctionSpace V.
+    numpy.ndarray : optional
+        Vector of nodal values of the eigenfunctions, computed on the
+        FunctionSpace V.
+    list : optional
+        List of eigenfunctions, defined on the FunctionSpace V.
+    """
     def boundary(x, on_boundary):
         return on_boundary
 
@@ -133,24 +145,20 @@ def laplacian_evd(V, k=64, bc="Dirichlet"):
     if bc not in bc_types:
         raise ValueError("Invalid bc, expected one of {bc_types}")
     elif bc == "Dirichlet":
-        if dim == 0:
-            bc = fe.DirichletBC(V, fe.Constant(0), boundary)
-        elif dim == 2:
-            bc = fe.DirichletBC(V, fe.Constant((0, 0)), boundary)
-        else:
-            raise NotImplementedError
+        bc = fe.DirichletBC(V, fe.Constant(0), boundary)
     else:
         bc = None
 
     # define variational problem
     u = fe.TrialFunction(V)
     v = fe.TestFunction(V)
+
     a = fe.inner(fe.grad(u), fe.grad(v)) * fe.dx
-    A = fe.PETScMatrix()
+    A = fe.PETScMatrix(comm)
     fe.assemble(a, tensor=A)
 
-    M = fe.PETScMatrix()
-    M_no_bc = fe.PETScMatrix()
+    M = fe.PETScMatrix(comm)
+    M_no_bc = fe.PETScMatrix(comm)
     fe.assemble(fe.inner(u, v) * fe.dx, tensor=M)
     fe.assemble(fe.inner(u, v) * fe.dx, tensor=M_no_bc)
 
@@ -168,15 +176,15 @@ def laplacian_evd(V, k=64, bc="Dirichlet"):
 
     # solver inspired by: cmaurini
     # https://gist.github.com/cmaurini/6dea21fc01c6a07caeb96ff9c86dc81e
-    E = SLEPc.EPS()
+    E = SLEPc.EPS(comm)
     E.create()
     E.setOperators(A, M)
-    E.setDimensions(nev=k)
+    E.setDimensions(nev=k, ncv=2*k)
     E.setWhichEigenpairs(E.Which.TARGET_MAGNITUDE)
     E.setTarget(0)
-    E.setTolerances(1e-12, 100000)
+    E.setTolerances(1e-12, 100_000)
     S = E.getST()
-    S.setType('sinvert')
+    S.setType("sinvert")
     E.setFromOptions()
     E.solve()
 
@@ -188,27 +196,35 @@ def laplacian_evd(V, k=64, bc="Dirichlet"):
     vi, wi = A.getVecs()
 
     laplace_eigenvals = np.zeros((k, ))
-    eigenvecs = np.zeros((vr.array_r.shape[0], k))
     errors = np.zeros((k, ))
+
+    if return_function:
+        eigenfunctions = [fe.Function(V) for i in range(k)]
+    else:
+        eigenvecs = np.zeros((vr.array_r.shape[0], k))
 
     for i in range(k):
         laplace_eigenvals[i] = np.real(E.getEigenpair(i, vr, vi))
-        eigenvecs[:, i] = vr.array_r
         errors[i] = E.computeError(i)
 
-    # scale so eigenfunctions are orthonormal on function space
-    M = fe.PETScMatrix()
-    fe.assemble(
-        fe.inner(fe.TrialFunction(V), fe.TestFunction(V)) * fe.dx,
-        tensor=M)
-    M = M.mat()
-    M_scipy = csr_matrix(M.getValuesCSR()[::-1], shape=M.size)
-    eigenvecs_scale = eigenvecs.T @ M_scipy @ eigenvecs
-    eigenvecs = eigenvecs / np.sqrt(eigenvecs_scale.diagonal())
-    return (laplace_eigenvals, eigenvecs)
+        # normalize by weighted norm on  the function space
+        M_no_bc.mult(vr, wr)
+        ef_norm = np.sqrt(wr.tDot(vr))
+
+        # scale by norm on the function space
+        if return_function:
+            eigenfunctions[i].vector().set_local(vr.getArray() / ef_norm)
+        else:
+            eigenvecs[:, i] = vr.array_r / ef_norm
+
+    # what are we returning
+    if return_function:
+        return (laplace_eigenvals, eigenfunctions)
+    else:
+        return (laplace_eigenvals, eigenvecs)
 
 
-def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
+def sq_exp_evd_hilbert(comm, V, k=64, scale=1., ell=1., bc="Dirichlet"):
     """
     Approximate the SqExp covariance using Hilbert-GP.
 
@@ -231,17 +247,17 @@ def sq_exp_evd_hilbert(V, k=64, scale=1., ell=1., bc="Dirichlet"):
         Boundary conditions to use in the approximation. Either 'Dirichlet' or
         'Neumann'.
     """
-    laplace_eigenvals, eigenvecs = laplacian_evd(V, k=k, bc=bc)
+    laplace_eigenvals, eigenvecs = laplacian_evd(
+        comm, V, k=k, bc=bc, return_function=False)
 
     # enforce positivity --- picks up eigenvalues that are negative
-    laplace_eigenvals = np.abs(laplace_eigenvals)
+    laplace_eigenvals = laplace_eigenvals
     logger.info("Laplacian eigenvalues: %s", laplace_eigenvals)
     eigenvals = sq_exp_spectral_density(
         np.sqrt(laplace_eigenvals),
         scale=scale,
         ell=ell,
         D=V.mesh().geometric_dimension())
-
     return (eigenvals, eigenvecs)
 
 
