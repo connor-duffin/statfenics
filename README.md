@@ -11,8 +11,8 @@ The package is very small and is mainly used for my own personal work so it is n
 
 ## Installation
 
-At the moment this available only from this repo (i.e. not `pypi`), installation thus uses a local editable install. Clone this repo and from this directory create an editable installation:
+At the moment the package is only available from this repo (i.e. not `pypi`), and the installation thus uses a local editable install. This can be done with a one-liner:
 
 ```{bash}
-pip install -e .
+pip install --editable git+https://github.com/connor-duffin/statfenics.git#egg=statfenics
 ```
